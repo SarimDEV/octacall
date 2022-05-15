@@ -1,72 +1,215 @@
-import type { NextPage } from 'next'
-import Head from 'next/head'
-import Image from 'next/image'
-import styles from '../styles/Home.module.css'
+import type { NextPage } from "next";
+import Head from "next/head";
+import Image from "next/image";
+import { useRef, useEffect, useState } from "react";
+import styles from "../styles/Home.module.css";
+import io, { Socket } from "socket.io-client";
+
+let socket: Socket | null = null;
 
 const Home: NextPage = () => {
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const pc = useRef<RTCPeerConnection | null>(null);
+  const textRef = useRef<HTMLTextAreaElement | null>(null);
+  const [offerVisible, setOfferVisible] = useState(true);
+  const [answerVisible, setAnswerVisible] = useState(false);
+  const [status, setStatus] = useState("Make a call now");
+
+  useEffect(() => {
+    socket = io({
+      path: "/api/socketio",
+    });
+
+    socket.on("connection-success", (success) => {
+      console.log("test 25", success);
+    });
+
+    socket.on("sdp", (data) => {
+      console.log("test", data);
+      if (data && data.sdp) {
+        pc.current?.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        if (data.sdp.type === "offer") {
+          setOfferVisible(false);
+          setAnswerVisible(true);
+          setStatus("Incoming call ...");
+        } else {
+          setStatus("Call Established");
+        }
+      }
+    });
+
+    socket.on("candidate", (candidate) => {
+      console.log("test1", candidate);
+      // if (candidate) candidates.current = [...candidates.current, candidate];
+      if (candidate) {
+        console.log("test3", candidate);
+        pc.current?.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    });
+
+    const constraints = {
+      audio: false,
+      video: true,
+    };
+
+    navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+      localVideoRef.current!.srcObject = stream;
+
+      stream.getTracks().forEach((track) => {
+        _pc.addTrack(track, stream);
+      });
+    });
+
+    const _pc = new RTCPeerConnection();
+
+    _pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        console.log("test4", JSON.stringify(e.candidate));
+        sendToPeer("candidate", e.candidate);
+      }
+    };
+
+    _pc.oniceconnectionstatechange = (e) => {
+      console.log("test5", e);
+    };
+
+    _pc.ontrack = (e) => {
+      remoteVideoRef.current!.srcObject = e.streams[0];
+    };
+
+    pc.current = _pc;
+
+    setInterval(() => {
+      if (pc && pc.current) {
+        pc.current.getStats(null).then((stats) => {
+          let statsOutput = "";
+
+          stats.forEach((report) => {
+            statsOutput +=
+              `<h2>Report: ${report.type}</h2>\n<strong>ID:</strong> ${report.id}<br>\n` +
+              `<strong>Timestamp:</strong> ${report.timestamp}<br>\n`;
+
+            // Now the statistics for this report; we intentionally drop the ones we
+            // sorted to the top above
+
+            Object.keys(report).forEach((statName) => {
+              if (
+                statName !== "id" &&
+                statName !== "timestamp" &&
+                statName !== "type"
+              ) {
+                statsOutput += `<strong>${statName}:</strong> ${report[statName]}<br>\n`;
+              }
+            });
+          });
+          console.log(stats);
+        });
+      }
+    }, 1000);
+
+    return () => {
+      if (socket) socket.disconnect();
+    };
+  }, []);
+
+  const processSdp = (sdp: RTCSessionDescriptionInit) => {
+    console.log("test2", JSON.stringify(sdp));
+    pc.current?.setLocalDescription(sdp);
+
+    sendToPeer("sdp", { sdp });
+  };
+
+  const sendToPeer = (eventType: any, payload: any) => {
+    if (socket) socket.emit(eventType, payload);
+  };
+
+  const createOffer = () => {
+    pc.current
+      ?.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+      })
+      .then((sdp) => {
+        // send sdp to server and set local description
+        processSdp(sdp);
+        setOfferVisible(false);
+        setStatus("calling...");
+      })
+      .catch((e) => console.log("test6", e));
+  };
+
+  const createAnswer = () => {
+    pc.current
+      ?.createAnswer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+      })
+      .then((sdp) => {
+        // send the answer sdp to the offering peers and set local description
+        processSdp(sdp);
+        setAnswerVisible(false);
+        setStatus("Call Established");
+      })
+      .catch((e) => console.log("test90", e));
+  };
+
+  const showHideButtons = () => {
+    if (offerVisible) {
+      return (
+        <div>
+          <button onClick={createOffer}>Call</button>
+        </div>
+      );
+    } else if (answerVisible) {
+      return (
+        <div>
+          <button onClick={createAnswer}>Answer</button>
+        </div>
+      );
+    }
+  };
+
   return (
-    <div className={styles.container}>
+    <div>
       <Head>
-        <title>Create Next App</title>
+        <title>OctaCall</title>
         <meta name="description" content="Generated by create next app" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
-
-      <main className={styles.main}>
-        <h1 className={styles.title}>
-          Welcome to <a href="https://nextjs.org">Next.js!</a>
-        </h1>
-
-        <p className={styles.description}>
-          Get started by editing{' '}
-          <code className={styles.code}>pages/index.tsx</code>
-        </p>
-
-        <div className={styles.grid}>
-          <a href="https://nextjs.org/docs" className={styles.card}>
-            <h2>Documentation &rarr;</h2>
-            <p>Find in-depth information about Next.js features and API.</p>
-          </a>
-
-          <a href="https://nextjs.org/learn" className={styles.card}>
-            <h2>Learn &rarr;</h2>
-            <p>Learn about Next.js in an interactive course with quizzes!</p>
-          </a>
-
-          <a
-            href="https://github.com/vercel/next.js/tree/canary/examples"
-            className={styles.card}
-          >
-            <h2>Examples &rarr;</h2>
-            <p>Discover and deploy boilerplate example Next.js projects.</p>
-          </a>
-
-          <a
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template&utm_campaign=create-next-app"
-            className={styles.card}
-          >
-            <h2>Deploy &rarr;</h2>
-            <p>
-              Instantly deploy your Next.js site to a public URL with Vercel.
-            </p>
-          </a>
-        </div>
-      </main>
-
-      <footer className={styles.footer}>
-        <a
-          href="https://vercel.com?utm_source=create-next-app&utm_medium=default-template&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Powered by{' '}
-          <span className={styles.logo}>
-            <Image src="/vercel.svg" alt="Vercel Logo" width={72} height={16} />
-          </span>
-        </a>
-      </footer>
+      <div>
+        <video
+          autoPlay
+          ref={localVideoRef}
+          style={{
+            width: 240,
+            height: 240,
+            margin: 5,
+            backgroundColor: "black",
+          }}
+        ></video>
+        <video
+          autoPlay
+          ref={remoteVideoRef}
+          style={{
+            width: 240,
+            height: 240,
+            margin: 5,
+            backgroundColor: "black",
+          }}
+        ></video>
+        <br />
+        {/* <button onClick={createOffer}>Create Offer</button>
+        <button onClick={createAnswer}>Create Answer</button>
+        <br /> */}
+        {showHideButtons()}
+        <div>{status}</div>
+        {/* <br />
+        <button onClick={setRemoteDescription}>Set Remote Description</button>
+        <button onClick={addCandidate}>Add Candidates</button> */}
+      </div>
     </div>
-  )
-}
+  );
+};
 
-export default Home
+export default Home;
